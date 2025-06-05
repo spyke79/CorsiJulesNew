@@ -2,6 +2,7 @@ const expertModel = require('../models/expertModel');
 const userModel = require('../models/userModel'); // For password updates
 const { hashPassword } = require('../utils/passwordUtils');
 const { validationResult } = require('express-validator');
+const calendarLessonModel = require('../models/calendarLessonModel'); // Added import
 
 async function createExpertHandler(req, res) {
   const errors = validationResult(req);
@@ -192,6 +193,36 @@ async function getCoursesForLoggedInExpertHandler(req, res) {
   }
 }
 
+async function getCourseCalendarForLoggedInExpertHandler(req, res) {
+  const errors = validationResult(req); // For any route-level validation, if added
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
+
+  try {
+    const userId = req.user.id; // users.user_id from JWT
+    const { courseId } = req.params;
+
+    const expertDetails = await expertModel.getExpertDetailsByUserId(userId);
+    if (!expertDetails || !expertDetails.expert_id) {
+      return res.status(403).json({ message: 'User is not recognized as an expert.' });
+    }
+    const expertId = expertDetails.expert_id; // This is experts.expert_id
+
+    const lessonsResult = await calendarLessonModel.getLessonsForCourseByExpert(parseInt(courseId, 10), expertId);
+
+    if (lessonsResult.error && lessonsResult.error === 'not_assigned') {
+      return res.status(403).json({ message: lessonsResult.message });
+    }
+
+    res.json(lessonsResult); // This will be an array of lessons or an error object from the model
+
+  } catch (error) {
+    console.error('Get course calendar for logged-in expert error:', error.message);
+    res.status(500).json({ message: 'Server error retrieving course calendar for expert.' });
+  }
+}
+
 module.exports = {
   createExpertHandler,
   getAllExpertsHandler,
@@ -203,4 +234,5 @@ module.exports = {
   addSubjectHandler,
   getExpertsListHandler: getExpertsListForSelectionHandler,
   getCoursesForLoggedInExpertHandler,
+  getCourseCalendarForLoggedInExpertHandler,
 };

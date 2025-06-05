@@ -1,0 +1,7 @@
+ALTER TABLE schools
+ADD COLUMN IF NOT EXISTS google_maps_link VARCHAR(2048);
+
+ALTER TABLE plessi
+ADD COLUMN IF NOT EXISTS google_maps_link VARCHAR(2048);
+
+COMMIT;

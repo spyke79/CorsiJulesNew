@@ -59,6 +59,7 @@ CREATE TABLE schools (
     contact_person VARCHAR(100),
     contact_email VARCHAR(255),
     contact_phone VARCHAR(50),
+    google_maps_link VARCHAR(2048), -- Added Google Maps link for school
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -69,6 +70,7 @@ CREATE TABLE plessi ( -- Italian for "school complex" or "campus"
     school_id INT NOT NULL,
     plesso_name VARCHAR(255) NOT NULL,
     address TEXT,
+    google_maps_link VARCHAR(2048), -- Added Google Maps link for plesso
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_school FOREIGN KEY (school_id) REFERENCES schools(school_id) ON DELETE CASCADE,

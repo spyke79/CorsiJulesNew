@@ -125,5 +125,13 @@ router.get(
     expertController.getCoursesForLoggedInExpertHandler
 );
 
+// Route for an expert to get their calendar for a specific course
+router.get(
+    '/my-courses/:courseId/calendar',
+    protect, authorizeRoles('Esperto'),
+    [param('courseId', 'Course ID must be an integer').isInt()], // Validate courseId param
+    expertController.getCourseCalendarForLoggedInExpertHandler
+);
+
 
 module.exports = router;

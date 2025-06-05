@@ -13,21 +13,11 @@ const db = require('../config/db');
  */
 async function findExpertConflicts(expertIds, lessonDate, startTime, endTime, excludingLessonId = null, client = null) {
   if (!expertIds || expertIds.length === 0) {
-    return []; // No experts assigned to the course, so no conflicts possible for them.
+    return [];
   }
-
-  const queryRunner = client || db; // Use transaction client if provided
-
-  // Construct full timestamp strings for query
-  // Ensure lessonDate is treated as date, and time is combined correctly.
-  // PostgreSQL can cast 'YYYY-MM-DD HH:MI:SS' to timestamp with time zone.
-  // Assuming DB server timezone or session timezone handles conversion correctly if input is local.
-  // For robustness, specify timezone if known, e.g., lessonDate + ' ' + startTime + ' Europe/Rome'
+  const queryRunner = client || db;
   const startTimestamp = `${lessonDate} ${startTime}`;
   const endTimestamp = `${lessonDate} ${endTime}`;
-
-  // Query to find lessons taught by any of the specified experts that overlap with the given time slot
-  // An overlap occurs if (ExistingStart < ProposedEnd) AND (ExistingEnd > ProposedStart)
   let conflictQueryText = `
     SELECT cl.lesson_id, cl.lesson_title, cl.start_time, cl.end_time, u.first_name, u.last_name AS expert_name
     FROM calendar_lessons cl
@@ -40,12 +30,10 @@ async function findExpertConflicts(expertIds, lessonDate, startTime, endTime, ex
       AND cl.end_time > $2::timestamptz
   `;
   const queryParams = [expertIds, startTimestamp, endTimestamp];
-
   if (excludingLessonId !== null) {
     conflictQueryText += ` AND cl.lesson_id != $4`;
     queryParams.push(excludingLessonId);
   }
-
   try {
     const { rows } = await queryRunner.query(conflictQueryText, queryParams);
     return rows;
@@ -55,39 +43,23 @@ async function findExpertConflicts(expertIds, lessonDate, startTime, endTime, ex
   }
 }
 
-
-/**
- * Creates a new lesson after checking for expert conflicts.
- * @param {object} lessonData Contains course_id, lesson_title, lesson_description, lesson_date, start_time, end_time, plesso_id?, location_details?
- * @returns {Promise<object>} The newly created lesson object or an error object with conflict info.
- */
 async function createLesson(lessonData) {
   const { course_id, lesson_title, lesson_description, lesson_date, start_time, end_time, plesso_id, location_details } = lessonData;
   const client = await db.connect();
-
   try {
     await client.query('BEGIN');
-
-    // 1. Get expert_ids for the course
     const courseExpertsResult = await client.query(
       'SELECT expert_id FROM course_experts WHERE course_id = $1;',
       [course_id]
     );
     const expertIds = courseExpertsResult.rows.map(row => row.expert_id);
-
-    // 2. Check for conflicts
     const conflicts = await findExpertConflicts(expertIds, lesson_date, start_time, end_time, null, client);
     if (conflicts.length > 0) {
       await client.query('ROLLBACK');
-      // Custom error structure to indicate conflict
       return { error: 'conflict', conflicts, message: 'One or more experts are already scheduled for an overlapping lesson.' };
     }
-
-    // 3. Insert the lesson
-    // Combine date and time for start_time and end_time fields
     const fullStartTime = `${lesson_date} ${start_time}`;
     const fullEndTime = `${lesson_date} ${end_time}`;
-
     const lessonInsertQuery = `
       INSERT INTO calendar_lessons (course_id, plesso_id, lesson_title, lesson_description, start_time, end_time, location_details)
       VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, $7)
@@ -97,16 +69,11 @@ async function createLesson(lessonData) {
       course_id, plesso_id, lesson_title, lesson_description, fullStartTime, fullEndTime, location_details
     ]);
     const newLesson = lessonResult.rows[0];
-
-    // 4. Automatically assign ALL experts of the course to this new lesson in lesson_experts
-    // This is an assumption. If specific experts need to be chosen per lesson, the UI/request must provide them.
-    // For now, if a lesson is created for a course, all course_experts associated with that course are linked to the lesson.
     if (expertIds.length > 0) {
         const courseExpertEntries = await client.query(
             'SELECT course_expert_id FROM course_experts WHERE course_id = $1 AND expert_id = ANY($2::int[]);',
             [course_id, expertIds]
         );
-
         const lessonExpertInsertQuery = `
             INSERT INTO lesson_experts (lesson_id, course_expert_id) VALUES ($1, $2);
         `;
@@ -114,11 +81,8 @@ async function createLesson(lessonData) {
             await client.query(lessonExpertInsertQuery, [newLesson.lesson_id, ce.course_expert_id]);
         }
     }
-
-
     await client.query('COMMIT');
-    // Refetch the lesson with expert details for consistent return structure (optional)
-    return getLessonById(newLesson.lesson_id, client); // Pass client to reuse transaction if needed
+    return getLessonById(newLesson.lesson_id, client);
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error creating lesson:', error);
@@ -128,8 +92,7 @@ async function createLesson(lessonData) {
     if (error.code === '23503' && error.constraint === 'calendar_lessons_plesso_id_fkey') {
         throw new Error('Plesso not found for this lesson.');
     }
-    // Check for invalid timestamp format
-    if (error.code === '22007' || error.code === '22008') { // invalid_datetime_format or datetime_field_overflow
+    if (error.code === '22007' || error.code === '22008') {
         throw new Error('Invalid date or time format provided.');
     }
     throw error;
@@ -138,13 +101,6 @@ async function createLesson(lessonData) {
   }
 }
 
-
-/**
- * Retrieves all lessons for a given course_id, ordered by date and start time.
- * Includes plesso_name if plesso_id is present.
- * @param {number} courseId The ID of the course.
- * @returns {Promise<Array<object>>} A list of lesson objects.
- */
 async function getLessonsByCourseId(courseId) {
   const queryText = `
     SELECT cl.*, p.plesso_name,
@@ -171,12 +127,6 @@ async function getLessonsByCourseId(courseId) {
   }
 }
 
-/**
- * Retrieves a single lesson by its ID.
- * @param {number} lessonId The ID of the lesson.
- * @param {pg.Client|null} client Optional DB client for transactions.
- * @returns {Promise<object|null>} The lesson object, or null if not found.
- */
 async function getLessonById(lessonId, client = null) {
   const queryRunner = client || db;
   const queryText = `
@@ -203,46 +153,28 @@ async function getLessonById(lessonId, client = null) {
   }
 }
 
-/**
- * Updates an existing lesson after checking for expert conflicts.
- * @param {number} lessonId The ID of the lesson to update.
- * @param {object} lessonData Contains fields to update.
- * @returns {Promise<object|null>} The updated lesson object, or an error object with conflict info, or null if not found.
- */
 async function updateLesson(lessonId, lessonData) {
   const { course_id, lesson_title, lesson_description, lesson_date, start_time, end_time, plesso_id, location_details } = lessonData;
   const client = await db.connect();
-
   try {
     await client.query('BEGIN');
-
-    // 1. Get current course_id if not provided (or to verify it if needed)
-    // For simplicity, we'll assume course_id might change or is provided.
-    // If course_id changes, expert conflict check must use new course's experts.
     const currentLesson = await client.query('SELECT course_id FROM calendar_lessons WHERE lesson_id = $1', [lessonId]);
     if (currentLesson.rows.length === 0) {
       await client.query('ROLLBACK');
       client.release();
-      return null; // Lesson not found
+      return null;
     }
     const finalCourseId = course_id || currentLesson.rows[0].course_id;
-
-
-    // 2. Get expert_ids for the relevant course
     const courseExpertsResult = await client.query(
       'SELECT expert_id FROM course_experts WHERE course_id = $1;',
       [finalCourseId]
     );
     const expertIds = courseExpertsResult.rows.map(row => row.expert_id);
-
-    // 3. Check for conflicts, excluding the current lesson being updated
     const conflicts = await findExpertConflicts(expertIds, lesson_date, start_time, end_time, lessonId, client);
     if (conflicts.length > 0) {
       await client.query('ROLLBACK');
       return { error: 'conflict', conflicts, message: 'One or more experts are already scheduled for an overlapping lesson.' };
     }
-
-    // 4. Update the lesson
     const fullStartTime = `${lesson_date} ${start_time}`;
     const fullEndTime = `${lesson_date} ${end_time}`;
     const lessonUpdateQuery = `
@@ -255,16 +187,10 @@ async function updateLesson(lessonId, lessonData) {
     const lessonResult = await client.query(lessonUpdateQuery, [
       finalCourseId, plesso_id, lesson_title, lesson_description, fullStartTime, fullEndTime, location_details, lessonId
     ]);
-
-    if (lessonResult.rows.length === 0) { // Should not happen if previous check passed, but good practice
+    if (lessonResult.rows.length === 0) {
         await client.query('ROLLBACK');
         return null;
     }
-
-    // If course_id changed, lesson_experts might need updating.
-    // The current logic assumes all experts for the *new* course_id are assigned.
-    // This might not be desired. For now, if course_id changes, this re-assigns all experts of the new course.
-    // A more refined approach would be to explicitly pass which experts should be assigned.
     if (course_id && course_id !== currentLesson.rows[0].course_id) {
         await client.query('DELETE FROM lesson_experts WHERE lesson_id = $1;', [lessonId]);
         if (expertIds.length > 0) {
@@ -278,13 +204,12 @@ async function updateLesson(lessonId, lessonData) {
             }
         }
     }
-
     await client.query('COMMIT');
     return getLessonById(lessonId, client);
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error updating lesson:', error);
-    if (error.code === '23503') { // Foreign key violation
+    if (error.code === '23503') {
         if (error.constraint === 'calendar_lessons_course_id_fkey') {
             throw new Error('Course not found for this lesson.');
         }
@@ -301,15 +226,8 @@ async function updateLesson(lessonId, lessonData) {
   }
 }
 
-
-/**
- * Deletes a lesson by its ID.
- * @param {number} lessonId The ID of the lesson to delete.
- * @returns {Promise<boolean>} True if deletion was successful, false otherwise.
- */
 async function deleteLesson(lessonId) {
   try {
-    // lesson_experts entries are cascaded by DB foreign key constraint
     const result = await db.query('DELETE FROM calendar_lessons WHERE lesson_id = $1 RETURNING *;', [lessonId]);
     return result.rowCount > 0;
   } catch (error) {
@@ -318,12 +236,6 @@ async function deleteLesson(lessonId) {
   }
 }
 
-
-/**
- * Calculates the total hours already scheduled for a given course.
- * @param {number} courseId The ID of the course.
- * @returns {Promise<number>} Total scheduled hours for the course.
- */
 async function getCourseScheduledHours(courseId) {
   const queryText = `
     SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 3600), 0) AS total_hours
@@ -339,6 +251,66 @@ async function getCourseScheduledHours(courseId) {
   }
 }
 
+/**
+ * Retrieves detailed lessons for a specific course if the given expert is assigned to it.
+ * @param {number} courseId The ID of the course.
+ * @param {number} expertId The ID of the expert (experts.expert_id).
+ * @returns {Promise<Array<object>|{error: string, message: string}>} Array of detailed lesson objects or an error object.
+ */
+async function getLessonsForCourseByExpert(courseId, expertId) {
+  const assignmentCheckQuery = `
+    SELECT 1 FROM course_experts
+    WHERE course_id = $1 AND expert_id = $2;
+  `;
+  try {
+    const assignmentResult = await db.query(assignmentCheckQuery, [courseId, expertId]);
+    if (assignmentResult.rows.length === 0) {
+      return {
+        error: 'not_assigned',
+        message: 'Expert is not assigned to this course.'
+      };
+    }
+  } catch (error) {
+    console.error('Error checking expert assignment:', error);
+    throw error;
+  }
+
+  const lessonsQueryText = `
+    SELECT
+      cl.lesson_id,
+      cl.lesson_title,
+      cl.lesson_description,
+      cl.start_time,
+      cl.end_time,
+      EXTRACT(EPOCH FROM (cl.end_time - cl.start_time)) / 3600 AS lesson_duration_hours,
+      c.course_name AS course_title,
+      s.school_name,
+      COALESCE(pl.address, s.address) AS venue_address,
+      COALESCE(pl.google_maps_link, s.google_maps_link) AS venue_google_maps_link,
+      cl.location_details,
+      p_details.plesso_name
+    FROM calendar_lessons cl
+    JOIN courses c ON cl.course_id = c.course_id
+    JOIN projects prj ON c.project_id = prj.project_id
+    JOIN schools s ON prj.school_id = s.school_id
+    LEFT JOIN plessi pl ON cl.plesso_id = pl.plesso_id
+    LEFT JOIN plessi p_details ON cl.plesso_id = p_details.plesso_id
+    WHERE cl.course_id = $1
+    ORDER BY cl.start_time;
+  `;
+  try {
+    const { rows } = await db.query(lessonsQueryText, [courseId]);
+    return rows.map(lesson => ({
+        ...lesson,
+        lesson_date: new Date(lesson.start_time).toISOString().split('T')[0],
+        start_time_formatted: new Date(lesson.start_time).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Rome' }),
+        end_time_formatted: new Date(lesson.end_time).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Rome' }),
+    }));
+  } catch (error) {
+    console.error(`Error fetching lessons for course ID ${courseId} by expert ID ${expertId}:`, error);
+    throw error;
+  }
+}
 
 module.exports = {
   createLesson,
@@ -347,5 +319,6 @@ module.exports = {
   updateLesson,
   deleteLesson,
   getCourseScheduledHours,
-  findExpertConflicts, // Exporting for potential direct use or testing
+  findExpertConflicts,
+  getLessonsForCourseByExpert,
 };
