@@ -74,4 +74,13 @@ router.delete(
   calendarLessonController.deleteLessonHandler
 );
 
+// GET /api/courses/:courseId/calendar/export-pdf - Export course calendar as PDF
+router.get(
+  '/courses/:courseId/calendar/export-pdf',
+  courseIdParamValidation, // Ensure courseId is an integer
+  // protect middleware is already applied to all routes by router.use() at the top
+  // authorizeRoles('Amministratore') is also applied if router.use() has it
+  calendarLessonController.exportCourseCalendarPdfHandler
+);
+
 module.exports = router;

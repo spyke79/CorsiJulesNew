@@ -15,6 +15,7 @@
     "express-validator": "^7.2.1",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.1",
+    "pdfmake": "^0.2.20",
     "pg": "^8.16.0"
   }
 }
